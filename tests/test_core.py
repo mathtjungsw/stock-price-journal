@@ -2,13 +2,13 @@ import asyncio
 import json
 import secrets
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from backend.app import create_app
-from backend.auth import digest
-from backend.journal import Journal, JournalError
+from backend.auth import Auth, SESSION_SECONDS, digest, password_hash
+from backend.journal import Journal, JournalError, one_month_later, sell_reference_price
 from backend.kiwoom import QuoteFeed
 from backend.market import KST, market_state
 
@@ -187,3 +187,62 @@ def test_invalid_future_and_unsupported_stock_rejected(client):
     assert client.post('/api/trades',json=row(day='2099-01-01')).status_code==422
     assert client.post('/api/trades',json=row(code='NOT-A-STOCK')).status_code==422
     assert client.post('/api/trades',json=row(qty=0)).status_code==422
+
+@pytest.mark.parametrize('day,expected',[
+    ('2026-09-14','2026-10-14'),('2026-10-13','2026-11-13'),
+    ('2026-01-31','2026-02-28'),('2024-01-31','2024-02-29'),
+    ('2026-12-31','2027-01-31'),('2026-03-31','2026-04-30')])
+def test_calendar_month_anniversary(day,expected):
+    assert one_month_later(date.fromisoformat(day)).isoformat()==expected
+
+def test_recent_buy_month_eligibility_uses_latest_buy_not_sell():
+    records=[row(day='2026-08-01'),row(day='2026-09-14'),row('sell',qty=1,day='2026-10-01')]
+    before=Journal.calculate(records,today=date(2026,10,13))['holdings'][0]
+    after=Journal.calculate(records,today=date(2026,10,14))['holdings'][0]
+    assert before['last_buy_date']=='2026-09-14'
+    assert before['next_buy_date']=='2026-10-14'
+    assert not before['buy_available'] and after['buy_available']
+    records.append(row(day='2026-10-13'))
+    assert not Journal.calculate(records,today=date(2026,10,14))['holdings'][0]['buy_available']
+    records[-1]['deleted']=1
+    assert Journal.calculate(records,today=date(2026,10,14))['holdings'][0]['buy_available']
+
+@pytest.mark.parametrize('cost,qty,expected',[
+    ('1624500',6,284500),('11880500',6,2080000),('1904',1,2000),
+    ('1905',1,2005),('5000',1,5250),('210',2,111)])
+def test_five_percent_reference_never_rounds_below_target(cost,qty,expected):
+    from decimal import Decimal
+    price=sell_reference_price(Decimal(cost),Decimal(qty))
+    assert price==expected
+    assert Decimal(price)*qty>=Decimal(cost)*Decimal('1.05')
+
+def test_sale_total_uses_remaining_quantity_and_buy_fees():
+    records=[row(qty=4,price=100,fee=20),row('sell',qty=1,price=110,day='2026-10-02')]
+    holding=Journal.calculate(records,today=date(2026,10,15))['holdings'][0]
+    assert holding['quantity']==3 and holding['average']==105
+    assert holding['sell_reference_price']==111
+    assert holding['sell_reference_amount']==333
+
+def test_login_remains_valid_for_exactly_seven_days(journal,monkeypatch):
+    base=1792000000
+    monkeypatch.setattr('backend.auth.time.time',lambda:base)
+    journal.set_meta('password_hash',password_hash('Seven-day-test-password'))
+    auth=Auth(journal)
+    session=auth.login('Seven-day-test-password','test-device')
+    assert SESSION_SECONDS==604800
+    assert session['expires_at']==base+604800
+    monkeypatch.setattr('backend.auth.time.time',lambda:base+604799)
+    assert auth.valid(session['token'])
+    monkeypatch.setattr('backend.auth.time.time',lambda:base+604800)
+    assert not auth.valid(session['token'])
+
+def test_quotes_match_each_accounts_current_holdings(client):
+    login(client)
+    client.post('/api/trades',json=row(code='005930'))
+    data=row(code='035420');data['account_id']='soyeon'
+    client.post('/api/trades',json=data)
+    assert [q['code'] for q in client.get('/api/quotes?account_id=joint').json()['quotes']]==['005930']
+    assert [q['code'] for q in client.get('/api/quotes?account_id=soyeon').json()['quotes']]==['035420']
+    client.post('/api/trades',json=row('sell',qty=2,day='2026-10-02'))
+    assert client.get('/api/quotes?account_id=joint').json()['quotes']==[]
+    assert client.get('/api/quotes?account_id=other').status_code==409

@@ -158,8 +158,12 @@ def create_app(db_path=None,feed_enabled=None):
         return {'ok':True}
 
     @app.get('/api/quotes')
-    def quotes(token=Depends(authorized)):
-        return feed.snapshot()
+    def quotes(account_id:str='joint',token=Depends(authorized)):
+        portfolio=conflict(journal.portfolio,account_id)
+        codes={h['code'] for h in portfolio['holdings']}
+        snapshot=feed.snapshot()
+        return {**snapshot,'account_id':account_id,
+                'quotes':[q for q in snapshot['quotes'] if q['code'] in codes]}
 
     @app.get('/api/portfolio')
     def portfolio(account_id:str='joint',token=Depends(authorized)):

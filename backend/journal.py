@@ -2,9 +2,11 @@
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from decimal import Decimal
+from calendar import monthrange
+from datetime import date, datetime, timezone
+from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
+from .market import now_kst
 
 STOCKS = [
     {"code": "005930", "name": "삼성전자"},
@@ -18,6 +20,25 @@ NAMES = {s['code']: s['name'] for s in STOCKS}
 
 class JournalError(ValueError):
     pass
+
+def one_month_later(day):
+    year=day.year+(day.month==12)
+    month=day.month%12+1
+    return date(year,month,min(day.day,monthrange(year,month)[1]))
+
+def sell_reference_price(cost, quantity):
+    """Minimum ordinary-share quote tick reaching 5% before selling costs.
+
+    KRX ordinary shares: https://regulation.krx.co.kr/contents/RGL/03/03010100/RGL03010100T3.jsp
+    The six supported stocks are ordinary shares, not ETF/ETN products.
+    """
+    target=Decimal(cost)*Decimal('1.05')/Decimal(quantity)
+    tick=1000
+    for ceiling,unit in ((2000,1),(5000,5),(20000,10),(50000,50),(200000,100),(500000,500)):
+        if target<ceiling:
+            tick=unit
+            break
+    return int((target/Decimal(tick)).to_integral_value(rounding=ROUND_CEILING))*tick
 
 class Journal:
     def __init__(self, path):
@@ -78,7 +99,8 @@ class Journal:
         return dict(row)
 
     @staticmethod
-    def calculate(rows, opening_cash=0):
+    def calculate(rows, opening_cash=0, today=None):
+        today=today or now_kst().date()
         positions, realized, cash = {}, Decimal(0), Decimal(opening_cash)
         for r in rows:
             if r.get('deleted'):
@@ -87,11 +109,12 @@ class Journal:
             if r['kind'] in ('deposit','withdraw'):
                 cash += Decimal(r['amount']) * (1 if r['kind']=='deposit' else -1)
                 continue
-            pos = positions.setdefault(r['code'], {'quantity':Decimal(0),'cost':Decimal(0)})
+            pos = positions.setdefault(r['code'], {'quantity':Decimal(0),'cost':Decimal(0),'last_buy_date':None})
             if r['kind']=='buy':
                 pos['quantity'] += q
                 pos['cost'] += q*p + fee
                 cash -= q*p + fee
+                pos['last_buy_date']=max(pos['last_buy_date'] or r['date'],r['date'])
             elif r['kind']=='sell':
                 if q > pos['quantity']:
                     raise JournalError(f"{r['date']} {NAMES.get(r['code'],r['code'])}: 매도 수량이 당시 보유 수량을 초과합니다.")
@@ -103,9 +126,15 @@ class Journal:
         holdings=[]
         for code,pos in positions.items():
             if pos['quantity']>0:
+                buy_date=date.fromisoformat(pos['last_buy_date'])
+                next_buy=one_month_later(buy_date)
+                sell_price=sell_reference_price(pos['cost'],pos['quantity'])
                 holdings.append({'code':code,'name':NAMES[code], 'quantity':int(pos['quantity']),
                     'cost':float(pos['cost']), 'average':float(pos['cost']/pos['quantity']),
-                    'target':float(pos['cost']/pos['quantity']*Decimal('1.05'))})
+                    'target':float(pos['cost']/pos['quantity']*Decimal('1.05')),
+                    'sell_reference_price':sell_price,'sell_reference_amount':sell_price*int(pos['quantity']),
+                    'last_buy_date':buy_date.isoformat(),'next_buy_date':next_buy.isoformat(),
+                    'buy_available':today>=next_buy})
         return {'holdings':holdings, 'cash':float(cash), 'realized':float(realized),
                 'cost':sum(h['cost'] for h in holdings)}
 

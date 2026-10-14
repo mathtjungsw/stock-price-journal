@@ -3,6 +3,8 @@ import hmac
 import secrets
 import time
 
+SESSION_SECONDS = 7 * 24 * 60 * 60
+
 def digest(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -46,7 +48,7 @@ class Auth:
             raise ValueError('비밀번호를 확인해 주세요.')
         self.failures.pop(ip,None)
         token=secrets.token_urlsafe(32)
-        expires=int(now+43200)
+        expires=int(now+SESSION_SECONDS)
         with self.journal.db() as db:
             db.execute('DELETE FROM sessions WHERE expires<?',(int(now),))
             db.execute('INSERT INTO sessions VALUES (?,?)',(digest(token),expires))
