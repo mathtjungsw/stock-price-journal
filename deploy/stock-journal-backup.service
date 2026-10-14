@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily personal stock journal backup
+
+[Service]
+Type=oneshot
+User=stockjournal
+Group=stockjournal
+UMask=0077
+ExecStart=/opt/stock-journal/.venv/bin/python /opt/stock-journal/deploy/backup.py

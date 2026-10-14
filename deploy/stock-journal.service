@@ -1,0 +1,25 @@
+[Unit]
+Description=Personal stock quote viewer and manual journal (no orders)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stockjournal
+Group=stockjournal
+WorkingDirectory=/opt/stock-journal
+EnvironmentFile=/etc/stock-journal.env
+ExecStart=/opt/stock-journal/.venv/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 8877 --workers 1 --no-access-log --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
+RestartSec=8
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/stock-journal
+MemoryMax=300M
+TasksMax=100
+
+[Install]
+WantedBy=multi-user.target

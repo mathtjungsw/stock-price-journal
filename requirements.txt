@@ -1,0 +1,6 @@
+fastapi==0.143.0
+uvicorn==0.54.0
+httpx==0.28.1
+websockets==15.0.1
+holidays==0.106
+tzdata==2026.5

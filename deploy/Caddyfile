@@ -1,0 +1,19 @@
+stock-journal.52-79-211-161.sslip.io {
+    encode gzip
+    request_body {
+        max_size 8KB
+    }
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        Strict-Transport-Security "max-age=31536000"
+    }
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8877
+    }
+    handle {
+        root * /opt/stock-journal/docs
+        file_server
+    }
+}

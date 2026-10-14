@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily personal stock journal backup schedule
+
+[Timer]
+OnCalendar=*-*-* 03:05:00 Asia/Seoul
+Persistent=true
+
+[Install]
+WantedBy=timers.target
